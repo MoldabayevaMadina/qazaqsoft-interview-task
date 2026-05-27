@@ -10,13 +10,35 @@ const DATA_URL = "./data/questions.json";
  * @typedef {{ title: string; timeLimitSec: number; passThreshold: number; questions: QuestionDTO[] }} QuizDTO
  */
 
+// class Question {
+//   /** @param {QuestionDTO} dto */
+//   constructor(dto) {
+//     this.id = dto.id;
+//     this.text = dto.text;
+//     this.options = dto.options;
+//     this.correctIndex = dto.correctIndex;
+//     this.topic = dto.topic ?? null;
+//   }
+// }
 class Question {
   /** @param {QuestionDTO} dto */
   constructor(dto) {
     this.id = dto.id;
     this.text = dto.text;
-    this.options = dto.options;
-    this.correctIndex = dto.correctIndex;
+
+    const options = dto.options.map((text, index) => ({
+      text,
+      isCorrect: index === dto.correctIndex,
+    }));
+
+    options.sort(() => Math.random() - 0.5);
+
+    this.options = options.map((o) => o.text);
+
+    this.correctIndex = options.findIndex(
+      (o) => o.isCorrect
+    );
+
     this.topic = dto.topic ?? null;
   }
 }
@@ -24,19 +46,19 @@ class Question {
 // ========== Сервисы ==========
 class StorageService {
   static saveState(state) {
-    // TODO: сериализовать state и сохранить в localStorage
-    // Пример: localStorage.setItem(STORAGE_KEYS.STATE, JSON.stringify(state));
-    throw new Error("Not implemented: StorageService.saveState");
+    localStorage.setItem(
+      STORAGE_KEYS.STATE,
+      JSON.stringify(state)
+    );
   }
 
   static loadState() {
-    // TODO: прочитать и распарсить состояние, вернуть объект или null
-    throw new Error("Not implemented: StorageService.loadState");
+    const raw = localStorage.getItem(STORAGE_KEYS.STATE);
+    return raw ? JSON.parse(raw) : null;
   }
 
   static clear() {
-    // TODO: очистить сохранённое состояние
-    throw new Error("Not implemented: StorageService.clear");
+    localStorage.removeItem(STORAGE_KEYS.STATE);
   }
 }
 
@@ -65,52 +87,82 @@ class QuizEngine {
 
   /** @param {number} index */
   goTo(index) {
-    // TODO: валидировать границы и сменить текущий индекс
-    throw new Error("Not implemented: QuizEngine.goTo");
+    if (index < 0 || index >= this.length) return;
+    this.currentIndex = index;
   }
 
   next() {
-    // TODO: перейти к следующему вопросу, если возможно
-    throw new Error("Not implemented: QuizEngine.next");
+    this.goTo(this.currentIndex + 1);
   }
 
   prev() {
-    // TODO: перейти к предыдущему вопросу, если возможно
-    throw new Error("Not implemented: QuizEngine.prev");
+    this.goTo(this.currentIndex - 1);
   }
 
   /** @param {number} optionIndex */
   select(optionIndex) {
-    // TODO: сохранить выбор пользователя для текущего вопроса
-    throw new Error("Not implemented: QuizEngine.select");
+    const q = this.currentQuestion;
+    this.answers[q.id] = optionIndex;
   }
 
   getSelectedIndex() {
-    // TODO: вернуть выбранный индекс для текущего вопроса (или undefined)
-    throw new Error("Not implemented: QuizEngine.getSelectedIndex");
+    return this.answers[this.currentQuestion.id];
   }
 
   tick() {
-    // TODO: декремент таймера; если 0 — завершить тест
-    throw new Error("Not implemented: QuizEngine.tick");
+    if (this.isFinished) return;
+    this.remainingSec--;
+    if (this.remainingSec <= 0) {
+      this.remainingSec = 0;
+      this.finish();
+    }
   }
 
   finish() {
-    // TODO: зафиксировать завершение и вернуть сводку результата
-    // return { correct: number, total: number, percent: number, passed: boolean }
-    throw new Error("Not implemented: QuizEngine.finish");
+    this.isFinished = true;
+    let correct = 0;
+    this.questions.forEach((question) => {
+      const selected = this.answers[question.id];
+      if (selected === question.correctIndex) {
+        correct++;
+      }
+    });
+
+    const total = this.length;
+    const percent = correct / total;
+    const passed = percent >= this.passThreshold;
+
+    return {
+      correct,
+      total,
+      percent,
+      passed,
+    };
   }
 
   /** Восстановление/выгрузка состояния для localStorage */
   toState() {
-    // TODO: вернуть сериализуемый снимок состояния
-    throw new Error("Not implemented: QuizEngine.toState");
+    return {
+      currentIndex: this.currentIndex,
+      answers: this.answers,
+      remainingSec: this.remainingSec,
+      isFinished: this.isFinished,
+      questions: this.questions,
+    };
   }
 
   /** @param {any} state */
   static fromState(quiz, state) {
-    // TODO: создать двигатель на базе сохранённого состояния
-    throw new Error("Not implemented: QuizEngine.fromState");
+    const engine = new QuizEngine(quiz);
+    if (state.questions) {
+      engine.questions = state.questions;
+    }
+    engine.currentIndex = state.currentIndex ?? 0;
+    engine.answers = state.answers ?? {};
+    engine.remainingSec = state.remainingSec ?? quiz.timeLimitSec;
+    engine.isFinished = state.isFinished ?? false;
+
+    return engine;
   }
 }
 
@@ -126,6 +178,7 @@ const els = {
   btnPrev: $("#btn-prev"),
   btnNext: $("#btn-next"),
   btnFinish: $("#btn-finish"),
+  actions: $("#quiz-actions"),
   result: $("#result-section"),
   resultSummary: $("#result-summary"),
   btnReview: $("#btn-review"),
@@ -145,6 +198,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (saved) {
     engine = QuizEngine.fromState(quiz, saved);
   } else {
+    quiz.questions.sort(() => Math.random() - 0.5);
     engine = new QuizEngine(quiz);
   }
 
@@ -206,12 +260,17 @@ function bindEvents() {
     if (summary) {
       stopTimer();
       renderResult(summary);
-      persist();
+      // persist();
+      StorageService.clear();
     }
   });
 
   els.btnReview.addEventListener("click", () => {
     reviewMode = true;
+    els.result.classList.add("hidden");
+    els.qSection.classList.remove("hidden");
+    els.actions.classList.remove("hidden");
+    engine.goTo(0);
     renderAll();
   });
 
@@ -227,6 +286,23 @@ function bindEvents() {
       safeCall(() => engine.select(idx));
       persist();
       renderNav();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+
+      if (!els.btnNext.disabled) {
+        els.btnNext.click();
+      }
+    }
+
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+
+      if (!els.btnPrev.disabled) {
+        els.btnPrev.click();
+      }
     }
   });
 }
@@ -286,6 +362,9 @@ function renderQuestion() {
     input.value = String(i);
     input.id = id;
     input.checked = engine.getSelectedIndex?.() === i;
+    if (reviewMode) {
+      input.disabled = true;
+    }
 
     const span = document.createElement("span");
     span.textContent = opt;
@@ -297,6 +376,16 @@ function renderQuestion() {
 }
 
 function renderNav() {
+  if (reviewMode) {
+    els.btnPrev.disabled = engine.currentIndex === 0;
+
+    els.btnNext.disabled =
+      engine.currentIndex >= engine.length - 1;
+
+    els.btnFinish.disabled = true;
+
+    return;
+  }
   const hasSelection = Number.isInteger(engine.getSelectedIndex?.());
   els.btnPrev.disabled = engine.currentIndex === 0;
   els.btnNext.disabled = !(
@@ -309,6 +398,8 @@ function renderNav() {
 
 function renderResult(summary) {
   els.result.classList.remove("hidden");
+  els.qSection.classList.add("hidden");
+  els.actions.classList.add("hidden");
   const pct = Math.round(summary.percent * 100);
   const status = summary.passed ? "Пройден" : "Не пройден";
   els.resultSummary.textContent = `${summary.correct} / ${summary.total} (${pct}%) — ${status}`;
@@ -317,6 +408,8 @@ function renderResult(summary) {
 // ========== Persist ==========
 function persist() {
   try {
+    if (engine.isFinished) return;
+
     const snapshot = engine.toState?.();
     if (snapshot) StorageService.saveState(snapshot);
   } catch {
